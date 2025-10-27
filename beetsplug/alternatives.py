@@ -25,6 +25,7 @@ import beets
 import beets.plugins
 import beetsplug.convert as convert
 import confuse
+from PIL import Image
 from beets import art, util
 from beets.library import Item, Library, parse_query_string
 from beets.plugins import BeetsPlugin
@@ -175,6 +176,9 @@ class Config:
     album_art_maxwidth: int | None
     """Maximum width of embedded album art. Larger art is resized."""
 
+    copy_album_art: bool
+    """If true, copy the album art files of full albums."""
+
     def __init__(self, collection_id: str, config: confuse.ConfigView, lib: Library):
         self.collection_id = collection_id
 
@@ -208,6 +212,9 @@ class Config:
         )
         assert album_art_maxwidth is None or isinstance(album_art_maxwidth, int)
         self.album_art_maxwidth = album_art_maxwidth
+
+        copy_album_art = config["album_art_file"].get(confuse.TypeTemplate(bool, default=False))
+        self.copy_album_art = copy_album_art
 
         if "directory" in config:
             dir = config["directory"].as_path()
@@ -248,6 +255,9 @@ class Action(Enum):
 
     #: Write album art to the track’s metadata
     SYNC_ART = "SYNC_ART"
+
+    #: Copy album cover art file
+    COPY_ART = "COPY_ART"
 
 
 class External:
@@ -309,6 +319,24 @@ class External:
                 yield (item, self._matched_item_action(item))
             elif self._get_stored_path(item):
                 yield (item, [Action.REMOVE])
+
+    def _matched_album_action(self, album):
+        dest_dir = self.album_destination(album)
+        if not dest_dir:
+            return (album, [])
+        if self._config.copy_album_art and album.artpath and Path(str(album.artpath, "utf8")).is_file():
+            path = album.artpath
+            dest = album.art_destination(path, dest_dir.encode())
+            source_path = Path(str(path, "utf8"))
+            dest_path = Path(str(dest, "utf8"))
+            if (not os.path.isfile(dest)) or (source_path.stat().st_mtime > dest_path.stat().st_mtime):
+                return (album, [Action.COPY_ART])
+        return (album, [])
+
+    def _albums_actions(self):
+        for album in self.lib.albums():
+            if self._config.query.match(album) or all(self._config.query.match(item) for item in album.items()):
+                yield self._matched_album_action(album)
 
     def ask_create(self, create: bool | None = None) -> bool:
         if not self._config.removable:
@@ -409,6 +437,27 @@ class External:
             for item, dest in converter.as_completed():
                 for item, dest in _get_queue_available(converting_done):
                     finalize_converted_item(item, dest)
+      
+        # do album actions
+        for (album, actions) in self._albums_actions():
+            for action in actions:
+                dest_dir = self.album_destination(album)
+                if action == Action.COPY_ART:
+                    path = album.artpath
+                    dest = album.art_destination(path, dest_dir.encode())
+
+                    if self._config.album_art_maxwidth:
+                        img = Image.open(path)
+                        w, h = img.size
+                        if w > self._config.album_art_maxwidth:
+                            img.thumbnail((self._config.album_art_maxwidth, h), Image.Resampling.LANCZOS)
+                        img.save(dest) 
+                    else:
+                        util.copy(path, dest, replace=True)
+
+                    source_path = Path(str(path, "utf8"))
+                    dest_path = Path(str(dest, "utf8"))
+                    print_(f'{source_path} -> {dest_path}')
 
     def destination(self, item: Item) -> Path:
         """Returns the path for `item` in the external collection."""
@@ -417,6 +466,14 @@ class External:
         )
         assert isinstance(path, str)
         return self._config.directory / path
+
+    def album_destination(self, album):
+        items = album.items()
+        if len(items) > 0:
+            head, tail = os.path.split(self.destination(items[0]))
+            return head
+        else:
+            return None
 
     def _set_stored_path(self, item: Item, path: Path):
         item[self.path_key] = str(path)

@@ -263,6 +263,17 @@ following settings.
   will be preserved. This is comparable to the setting with the same
   name of the [convert plugin][convert plugin].
 
+* `albumart_file` When true, writes album artwork as separate image
+  files alongside the tracks in each album directory. 
+  This applies only to albums for which either
+  (a) the configured `query` matches the album or 
+  (b) the configured `query` matches all of the album's items.
+  The artwork file is placed in the same directory as the first track of 
+  the album, using the filename configured by beet's [art_filename](https://beets.readthedocs.io/en/stable/reference/config.html#art-filename) 
+  setting. If`albumart_maxwidth` is set, the album art is downscaled 
+  accordingly. Note that artwork files are not automatically removed 
+  when albums are deleted from the collection.
+
 * **`removable`** If this is `true` (the default) and `directory` does
   not exist, the `update` command will ask you to confirm the creation
   of the external collection. (optional)
